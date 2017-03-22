@@ -10,12 +10,13 @@
       // todo: read this stuff from a config
       private $_api_token = '';
       private $_start_url = 'https://slack.com/api/rtm.start';
-
+      private $_loop_sleep = 0.8; // how many seconds to sleep in the main loop
+      private $_max_idle = 8; // if no event is received for this many seconds we send a ping
       private $_ws = null;
       private $_users = array();
       private $_channels = array();
       private $_send_id = 0;
-      
+
       private $_generator = null;
 
       private function _log($message)
@@ -76,7 +77,7 @@
 
       private function _receive()
       {
-         return $this->_ws->receive();
+         return $this->_ws->receive(true);
       }
 
       public function __construct()
@@ -89,51 +90,71 @@
          $this->_loop();
       }
 
+      private function _ping()
+      {
+         $this->_log('ping');
+         $message = [
+            'type' => "ping"
+         ];
+         $this->_send($message);
+      }
+
+      private function _send($message)
+      {
+         $this->_send_id ++;
+         $message['id'] = $this->_send_id;
+         $this->_ws->send(json_encode($message));
+      }
+
       private function _loop()
       {
-         $start = time();
+         $start = microtime(true);
+         $last_action = $start;
          $counter = 0;
          $time_limit = 0; // in seconds, for testing
          while(true)
          {
             $counter ++;
-            $this->_do($counter);
-            if($time_limit>0 and (time() - $start) > $time_limit) break;
+            if( $this->_do($counter) ) $last_action = microtime(true);
+            $now = microtime(true);
+            if(($now - $last_action) > $this->_max_idle) $this->_ping();
+            if($time_limit>0 and ($now - $start) > $time_limit) break;
          }
       }
 
+      // returns true if anything was received, false if not
       private function _do($counter)
       {
-         sleep(1);
+         usleep(1000000*$this->_loop_sleep);
          $event = json_decode($this->_receive());
+         if(is_null($event)) return false;
          if(isset($event->type)) // error messages have no type
          {
             switch($event->type)
             {
-               case 'message':
-                  if(strpos($event->channel, 'D')===0)
-                  {
-                     $this->_handle_dm($event);
-                  }
-                  else
-                  {
-                     $this->_handle_message($event);
-                  }
+            case 'message':
+               if(strpos($event->channel, 'D')===0)
+               {
+                  $this->_handle_dm($event);
+               }
+               else
+               {
+                  $this->_handle_message($event);
+               }
                break;
             }
          }
+         return true;
       }
 
       private function _handle_dm($event)
       {
-         $this->_send_id ++;
          $message = [
-            'id' => $this->_send_id,
             'type' => 'message',
             'channel' => $event->channel,
             'text' => $this->_phrase()
          ];
-         $this->_ws->send(json_encode($message));
+         $this->_send($message);
       }
       private function _handle_message($event)
       {
