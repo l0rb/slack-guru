@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#composer-lock-the-lock-file",
         "This file is @generated automatically"
     ],
-    "content-hash": "929f2e58636a2f7a8bc01f81bedf6786",
+    "content-hash": "9c2a414ea498d974aad9fb53f1509935",
     "packages": [
         {
             "name": "guzzlehttp/guzzle",
@@ -121,16 +121,16 @@
         },
         {
             "name": "guzzlehttp/psr7",
-            "version": "1.4.1",
+            "version": "1.4.2",
             "source": {
                 "type": "git",
                 "url": "https://github.com/guzzle/psr7.git",
-                "reference": "0d6c7ca039329247e4f0f8f8f6506810e8248855"
+                "reference": "f5b8a8512e2b58b0071a7280e39f14f72e05d87c"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/guzzle/psr7/zipball/0d6c7ca039329247e4f0f8f8f6506810e8248855",
-                "reference": "0d6c7ca039329247e4f0f8f8f6506810e8248855",
+                "url": "https://api.github.com/repos/guzzle/psr7/zipball/f5b8a8512e2b58b0071a7280e39f14f72e05d87c",
+                "reference": "f5b8a8512e2b58b0071a7280e39f14f72e05d87c",
                 "shasum": ""
             },
             "require": {
@@ -182,7 +182,7 @@
                 "uri",
                 "url"
             ],
-            "time": "2017-02-27T10:51:17+00:00"
+            "time": "2017-03-20T17:10:46+00:00"
         },
         {
             "name": "psr/http-message",
@@ -236,17 +236,20 @@
         },
         {
             "name": "textalk/websocket",
-            "version": "1.2.0",
+            "version": "dev-master",
             "source": {
                 "type": "git",
-                "url": "https://github.com/Textalk/websocket-php.git",
-                "reference": "bfa18bb6bf523680c7803f6b04694fbbf2f67bbf"
+                "url": "https://github.com/synchrotalk/websocket-php.git",
+                "reference": "9d041f43608def3850da05b56b75495bdf9ad22a"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/Textalk/websocket-php/zipball/bfa18bb6bf523680c7803f6b04694fbbf2f67bbf",
-                "reference": "bfa18bb6bf523680c7803f6b04694fbbf2f67bbf",
+                "url": "https://api.github.com/repos/synchrotalk/websocket-php/zipball/9d041f43608def3850da05b56b75495bdf9ad22a",
+                "reference": "9d041f43608def3850da05b56b75495bdf9ad22a",
                 "shasum": ""
+            },
+            "require": {
+                "php": "~5.4 || ~7.0"
             },
             "require-dev": {
                 "cboden/ratchet": "0.3.*",
@@ -260,7 +263,11 @@
                     "WebSocket\\": "lib"
                 }
             },
-            "notification-url": "https://packagist.org/downloads/",
+            "autoload-dev": {
+                "psr-4": {
+                    "WebSocket\\Tests\\": "tests"
+                }
+            },
             "license": [
                 "MIT"
             ],
@@ -271,13 +278,18 @@
                 }
             ],
             "description": "WebSocket client and server",
-            "time": "2015-10-09T07:32:42+00:00"
+            "support": {
+                "source": "https://github.com/synchrotalk/websocket-php/tree/master"
+            },
+            "time": "2016-09-23 04:23:26"
         }
     ],
     "packages-dev": [],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": [],
+    "stability-flags": {
+        "textalk/websocket": 20
+    },
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": [],

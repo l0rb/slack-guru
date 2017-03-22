@@ -12,7 +12,7 @@ namespace WebSocket;
 
 class Base {
   protected $socket, $is_connected = false, $is_closing = false, $last_opcode = null,
-    $close_status = null, $huge_payload = null;
+    $close_status = null, $huge_payload = '';
 
   protected static $opcodes = array(
     'continuation' => 0,
@@ -22,6 +22,18 @@ class Base {
     'ping'         => 9,
     'pong'         => 10,
   );
+
+  private static $FIRST_BYTE_MASK       = 0b10001111;
+  private static $SECOND_BYTE_MASK      = 0b11111111;
+
+  private static $FINAL_BIT             = 0b10000000;
+  private static $OPCODE_MASK           = 0b00001111;
+
+  private static $MASKED_BIT            = 0b10000000;
+  private static $PAYLOAD_LENGTH_MASK   = 0b01111111;
+
+  private static $PAYLOAD_LENGTH_16BIT  = 0b01111110;
+  private static $PAYLOAD_LENGTH_64BIT  = 0b01111111;
 
   public function getLastOpcode()  { return $this->last_opcode;  }
   public function getCloseStatus() { return $this->close_status; }
@@ -75,84 +87,123 @@ class Base {
 
   }
 
+
   protected function send_fragment($final, $payload, $opcode, $masked) {
-    // Binary string for header.
-    $frame_head_binstr = '';
 
-    // Write FIN, final fragment bit.
-    $frame_head_binstr .= (bool) $final ? '1' : '0';
+    $frame = [0, 0];
 
-    // RSV 1, 2, & 3 false and unused.
-    $frame_head_binstr .= '000';
-
-    // Opcode rest of the byte.
-    $frame_head_binstr .= sprintf('%04b', self::$opcodes[$opcode]);
-
-    // Use masking?
-    $frame_head_binstr .= $masked ? '1' : '0';
+    // Set final bit
+    $frame[0] |= self::$FINAL_BIT * !!$final;
+    // Set correct opcode
+    $frame[0] |= self::$OPCODE_MASK & self::$opcodes[$opcode];
+    // Reset reserved bytes
+    $frame[0] &= self::$FIRST_BYTE_MASK;
 
     // 7 bits of payload length...
     $payload_length = strlen($payload);
     if ($payload_length > 65535) {
-      $frame_head_binstr .= decbin(127);
-      $frame_head_binstr .= sprintf('%064b', $payload_length);
+      $length_opcode = self::$PAYLOAD_LENGTH_64BIT;
+      array_push($frame, pack('J', $payload_length));
     }
     elseif ($payload_length > 125) {
-      $frame_head_binstr .= decbin(126);
-      $frame_head_binstr .= sprintf('%016b', $payload_length);
+      $length_opcode = self::$PAYLOAD_LENGTH_16BIT;
+      array_push($frame, pack('n', $payload_length));
     }
     else {
-      $frame_head_binstr .= sprintf('%07b', $payload_length);
+      $length_opcode = $payload_length;
     }
 
-    $frame = '';
+    // Set masked mode
+    $frame[1] |= self::$MASKED_BIT * !!$masked;
+    $frame[1] |= self::$PAYLOAD_LENGTH_MASK & $length_opcode;
 
-    // Write frame head to frame.
-    foreach (str_split($frame_head_binstr, 8) as $binstr) $frame .= chr(bindec($binstr));
 
     // Handle masking
     if ($masked) {
       // generate a random mask:
       $mask = '';
       for ($i = 0; $i < 4; $i++) $mask .= chr(rand(0, 255));
-      $frame .= $mask;
+      array_push($frame, $mask);
+
+      for ($i = 0; $i < $payload_length; $i++) $payload[$i] = $payload[$i] ^ $mask[$i & 3];
     }
 
-    // Append payload to frame:
-    for ($i = 0; $i < $payload_length; $i++) {
-      $frame .= ($masked === true) ? $payload[$i] ^ $mask[$i % 4] : $payload[$i];
-    }
+    // Append payload to frame
+    array_push($frame, $payload);
 
     $this->write($frame);
   }
 
-  public function receive() {
+  public function receive($try = false) {
     if (!$this->is_connected) $this->connect(); /// @todo This is a client function, fixme!
 
-    $this->huge_payload = '';
-
     $response = null;
-    while (is_null($response)) $response = $this->receive_fragment();
+    do {
+      $response = $this->receive_fragment();
+    } while (is_null($response) && !$try);
 
     return $response;
   }
 
+  protected $unparsed_fragment = '';
+
+  protected function receive_fragment_header() {
+    $minimum_size = 2;
+    $minimum_remain = $minimum_size - strlen($this->unparsed_fragment);
+
+    if ($this->will_block($minimum_remain))
+      return null;
+
+    $this->unparsed_fragment .= $this->read($minimum_remain);
+
+    $payload_length = ord($this->unparsed_fragment[1]) & 127; // Bits 1-7 in byte 1
+
+    switch ($payload_length)
+    {
+    default:
+      return $this->unparsed_fragment;
+    case self::$PAYLOAD_LENGTH_16BIT:
+      $extra_header_bytes = 2;
+      break;
+    case self::$PAYLOAD_LENGTH_64BIT:
+      $extra_header_bytes = 8;
+      break;
+    }
+
+    $extra_remain =
+      $minimum_size
+      + $extra_header_bytes
+      - strlen($this->unparsed_fragment);
+
+    if ($this->will_block($extra_remain))
+      return null;
+
+    $this->unparsed_fragment .= $this->read($extra_remain);
+
+    return $this->unparsed_fragment;
+  }
+
   protected function receive_fragment() {
 
-    // Just read the main fragment information first.
-    $data = $this->read(2);
+    $data = $this->receive_fragment_header();
+
+    // Buffer not ready for header
+    if ($data === null)
+      return null;
 
     // Is this the final fragment?  // Bit 0 in byte 0
     /// @todo Handle huge payloads with multiple fragments.
-    $final = (boolean) (ord($data[0]) & 1 << 7);
+    $final = ord($data[0]) & self::$FINAL_BIT;
 
-    // Should be unused, and must be false…  // Bits 1, 2, & 3
-    $rsv1  = (boolean) (ord($data[0]) & 1 << 6);
-    $rsv2  = (boolean) (ord($data[0]) & 1 << 5);
-    $rsv3  = (boolean) (ord($data[0]) & 1 << 4);
+    // Should be zero
+    $rsv = ord($data[0]) & ~self::$FIRST_BYTE_MASK;
+
+    if ($rsv !== 0) {
+      throw new ConnectionException("Reserved bits should be zero");
+    }
 
     // Parse opcode
-    $opcode_int = ord($data[0]) & 31; // Bits 4-7
+    $opcode_int = ord($data[0]) & self::$OPCODE_MASK;
     $opcode_ints = array_flip(self::$opcodes);
     if (!array_key_exists($opcode_int, $opcode_ints)) {
       throw new ConnectionException("Bad opcode in websocket frame: $opcode_int");
@@ -165,17 +216,30 @@ class Base {
     }
 
     // Masking?
-    $mask = (boolean) (ord($data[1]) >> 7);  // Bit 0 in byte 1
+    $mask = ord($data[1]) & self::$MASKED_BIT;
 
     $payload = '';
 
+
     // Payload length
-    $payload_length = (integer) ord($data[1]) & 127; // Bits 1-7 in byte 1
+    $payload_length = ord($data[1]) & self::$PAYLOAD_LENGTH_MASK;
+
     if ($payload_length > 125) {
-      if ($payload_length === 126) $data = $this->read(2); // 126: Payload is a 16-bit unsigned int
-      else                         $data = $this->read(8); // 127: Payload is a 64-bit unsigned int
-      $payload_length = bindec(self::sprintB($data));
+      if ($payload_length === self::$PAYLOAD_LENGTH_16BIT)
+        $unpack_mode = 'n'; // 126: 'n' means big-endian 16-bit unsigned int
+      else
+        $unpack_mode = 'J'; // 127: 'J' means big-endian 64-bit unsigned int
+
+      $unpacked = unpack($unpack_mode, substr($data, 2));
+      $payload_length = current($unpacked);
     }
+
+    // Try again later when fragment is downloaded
+    if ($this->will_block($mask * 4 + $payload_length))
+      return null;
+
+    // Enter fragment reading state
+    $this->unparsed_fragment = '';
 
     // Get masking key.
     if ($mask) $masking_key = $this->read(4);
@@ -186,16 +250,17 @@ class Base {
 
       if ($mask) {
         // Unmask payload.
-        for ($i = 0; $i < $payload_length; $i++) $payload .= ($data[$i] ^ $masking_key[$i % 4]);
+        for ($i = 0; $i < $payload_length; $i++) $data[$i] = $data[$i] ^ $masking_key[$i & 3];
       }
-      else $payload = $data;
+
+      $payload = $data;
     }
 
     if ($opcode === 'close') {
       // Get the close status.
       if ($payload_length >= 2) {
-        $status_bin = $payload[0] . $payload[1];
-        $status = bindec(sprintf("%08b%08b", ord($payload[0]), ord($payload[1])));
+        $status = current(unpack('n', $payload)); // read 16-bit short
+
         $this->close_status = $status;
         $payload = substr($payload, 2);
 
@@ -218,7 +283,7 @@ class Base {
     else if ($this->huge_payload) {
       // sp we need to retreive the whole payload
       $payload = $this->huge_payload .= $payload;
-      $this->huge_payload = null;
+      $this->huge_payload = '';
     }
 
     return $payload;
@@ -231,9 +296,8 @@ class Base {
    * @param string  $message A closing message, max 125 bytes.
    */
   public function close($status = 1000, $message = 'ttfn') {
-    $status_binstr = sprintf('%016b', $status);
-    $status_str = '';
-    foreach (str_split($status_binstr, 8) as $binstr) $status_str .= chr(bindec($binstr));
+    $status_str = pack('n', $status);
+
     $this->send($status_str . $message, 'close', true);
 
     $this->is_closing = true;
@@ -243,6 +307,18 @@ class Base {
   }
 
   protected function write($data) {
+
+    // Array contains binary data and split-ed bytes
+    if (is_array($data)) {
+      foreach ($data as $part)
+        $this->write($part);
+      return;
+    }
+
+    // If it is not binary data, then it is byte
+    if (!is_string($data))
+      $data = pack('C', $data);
+
     $written = fwrite($this->socket, $data);
 
     if ($written < strlen($data)) {
@@ -252,8 +328,10 @@ class Base {
     }
   }
 
+  protected $socket_buffer = '';
+
   protected function read($length) {
-    $data = '';
+    $data = &$this->socket_buffer;
     while (strlen($data) < $length) {
       $buffer = fread($this->socket, $length - strlen($data));
       if ($buffer === false) {
@@ -272,16 +350,35 @@ class Base {
       }
       $data .= $buffer;
     }
-    return $data;
+
+    $return = substr($data, 0, $length);
+    $data = substr($data, $length);
+    return $return;
   }
 
+  protected function bufferize($length) {
+    while (1) {
+      $buffer_length = strlen($this->socket_buffer);
+      $remain = $length - $buffer_length;
 
-  /**
-   * Helper to convert a binary to a string of '0' and '1'.
-   */
-  protected static function sprintB($string) {
-    $return = '';
-    for ($i = 0; $i < strlen($string); $i++) $return .= sprintf("%08b", ord($string[$i]));
-    return $return;
+      if ($remain <= 0)
+        return true;
+
+      $fetched = fread($this->socket, $remain);
+
+      if ($fetched === false)
+        break;
+
+      if (strlen($fetched) == 0)
+        break;
+
+      $this->socket_buffer .= $fetched;
+    }
+
+    return false;
+  }
+
+  protected function will_block($length) {
+    return !$this->bufferize($length);
   }
 }
