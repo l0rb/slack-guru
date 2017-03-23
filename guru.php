@@ -7,22 +7,33 @@
 
    class Guru {
 
-      // todo: read this stuff from a config
+      // these can be configured
       private $_api_token = '';
       private $_start_url = 'https://slack.com/api/rtm.start';
       private $_loop_sleep = 0.8; // how many seconds to sleep in the main loop
       private $_max_idle = 8; // if no event is received for this many seconds we send a ping
+      private $_echo_log = false;
+      private $_file_log = false;
+      private $_trigger = ['technische analyse', 'guru'];
+
+      // don't touch these 
+      private $_generator = null;
       private $_ws = null;
       private $_users = array();
       private $_channels = array();
       private $_send_id = 0;
 
-      private $_generator = null;
-
       private function _log($message)
       {
-         // todo: proper log
-         echo date('H:i:s'), ' ', $message, PHP_EOL;
+         $logline = date('H:i:s') . ' ' . $message . PHP_EOL;
+
+         if($this->_echo_log)
+            echo $logline;
+
+         if($this->_file_log)
+         {
+            // todo: write logline to a file
+         }
       }
 
       private function _get_ws_url()
@@ -82,8 +93,25 @@
 
       public function __construct()
       {
+         // read config first
+         $handle = fopen('conf.cfg', 'r');
+         if ($handle) {
+            while(($line = fgets($handle)) !== false) {
+               if(strpos($line, '#')===0) continue; // ignore comments: lines starting with #
+               $line = explode('|', $line, 2);
+               if(count($line)!=2) continue;
+               if($line[0]=='api-token') $this->_api_token = trim($line[1]);
+               if($line[0]=='echo-log') $this->_echo_log = (bool)trim($line[1]);
+               if($line[0]=='file-log') $this->_file_log = (bool)trim($line[1]);
+            }
+            fclose($handle);
+         } else {
+            $this->_log("Couldn't read config file.");
+            return;
+         }
+
          $this->_generator = new AnalysisGenerator();
-         $ws_url = $this->_get_ws_url();
+         if(!($ws_url = $this->_get_ws_url())) return;
          $lorb = $this->_search_user('lorb');
 
          $this->_ws = new WebSocket\Client($ws_url);
@@ -135,7 +163,7 @@
             case 'message':
                if(strpos($event->channel, 'D')===0)
                {
-                  $this->_handle_dm($event);
+                  $this->_handle_message($event);
                }
                else
                {
@@ -158,8 +186,35 @@
       }
       private function _handle_message($event)
       {
-         if(isset($event->text) && strpos(strtolower($event->text),'technische analyse')!==false)
+         if(isset($event->text) && $this->_trigger($event->text))
             $this->_handle_dm($event);
+      }
+      private function _trigger($text)
+      {
+         // prepare the text
+         $text = iconv("utf-8","ascii//TRANSLIT", $text);  // replace umlauts and similar stuff with closest ascii match
+         $text = preg_replace('/[^a-z ]+/', '', strtolower($text)); // throw out anything that is not a letter or a space
+
+         // first do an exact search
+         foreach($this->_trigger as $trigger)
+            if(strpos($text,$trigger)!==false) return true;
+
+         // getting fancy
+         $words = explode(' ', $text);
+         foreach($this->_trigger as $trigger)
+         {
+            $n = count(explode(' ', $trigger)); // $trigger is an n-graph, compare to each n-graph of the text
+            foreach($words as $key => $word)
+            {
+               if(($key+$n)>count($words)) break; // not enough words left to do meaningful comparison
+               for($i=1;$i<$n;$i++)
+               {
+                  $word .= ' '.$words[$key+$i];
+               }
+               $d = levenshtein($word, $trigger);
+               if($d < ceil(strlen($trigger)/4)) return true; // allow higher distances if the string is longer
+            }
+         }
       }
 
    }
