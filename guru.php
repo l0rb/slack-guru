@@ -94,7 +94,7 @@
       public function __construct()
       {
          // read config first
-         $handle = fopen('conf.cfg', 'r');
+         $handle = fopen(__DIR__.'/conf.cfg', 'r');
          if ($handle) {
             while(($line = fgets($handle)) !== false) {
                if(strpos($line, '#')===0) continue; // ignore comments: lines starting with #
