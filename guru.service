@@ -1,0 +1,11 @@
+[Unit]
+Description=Guru Slack Bot
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/lorb/slack-guru/guru.php
+Restart=always
+
+[Install]
+Alias=guru.service
